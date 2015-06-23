@@ -1,0 +1,17 @@
+{
+  "name": "Go Queue Example App",
+  "description": "Go Background / Queue Example App",
+  "keywords": [
+    "postgresql",
+    "go"
+  ],
+  "website": "http://github.com/heroku-examples/go_queue_example",
+  "repository": "http://github.com/heroku-examples/go_queue_example",
+  "scripts": {},
+  "env": {
+    "BUILDPACK_URL": "https://github.com/heroku/heroku-buildpack-go"
+  },
+  "addons": [
+    "heroku-postgresql"
+  ]
+}
