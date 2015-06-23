@@ -68,13 +68,8 @@ func handlePostIndexRequest(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func handleGetIndexStatus(w http.ResponseWriter, r *http.Request) {
-}
-
 func handleIndexRequest(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case "GET":
-		handleGetIndexStatus(w, r)
 	case "POST":
 		handlePostIndexRequest(w, r)
 	default:

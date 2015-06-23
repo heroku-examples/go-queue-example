@@ -37,6 +37,8 @@ var (
 	Qc      *que.Client
 )
 
+// prepQue ensures that the que table exists and que's prepared statements are
+// run. It is meant to be used in a pgx.ConnPool's AfterConnect hook.
 func prepQue(conn *pgx.Conn) error {
 	_, err := conn.Exec(TableSQL)
 	if err != nil {
@@ -46,6 +48,7 @@ func prepQue(conn *pgx.Conn) error {
 	return que.PrepareStatements(conn)
 }
 
+// GetPgxPool based on the provided database URL
 func GetPgxPool(dbURL string) (*pgx.ConnPool, error) {
 	pgxcfg, err := pgx.ParseURI(dbURL)
 	if err != nil {
