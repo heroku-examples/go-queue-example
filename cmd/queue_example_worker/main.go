@@ -11,10 +11,6 @@ import (
 	"github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/bgentry/que-go"
 )
 
-var (
-	qc *que.Client
-)
-
 // indexURLJob would do whatever indexing is necessary in the background
 func indexURLJob(j *que.Job) error {
 	log.WithField("job", j).Info("Processing Job Now! (not really)")
@@ -22,21 +18,14 @@ func indexURLJob(j *que.Job) error {
 }
 
 func main() {
-	dbURL := os.Getenv("DATABASE_URL")
-	pgxpool, err := qe.GetPgxPool(dbURL)
-	if err != nil {
-		log.WithField("DATABASE_URL", dbURL).Fatal(err)
-	}
-	defer pgxpool.Close()
-
-	qc = que.NewClient(pgxpool)
+	defer qe.PgxPool.Close()
 
 	wm := que.WorkMap{
 		qe.IndexRequestJob: indexURLJob,
 	}
 
 	// 2 worker go routines
-	workers := que.NewWorkerPool(qc, wm, 2)
+	workers := que.NewWorkerPool(qe.Qc, wm, 2)
 
 	// Catch signal so we can gracefully shutdown
 	sigCh := make(chan os.Signal)

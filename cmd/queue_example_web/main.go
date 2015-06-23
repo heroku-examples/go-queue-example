@@ -16,10 +16,6 @@ import (
 	"github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/codegangsta/negroni"
 )
 
-var (
-	qc *que.Client
-)
-
 type indexRequest struct {
 	URL string `json:url`
 }
@@ -36,7 +32,7 @@ func queueIndexRequest(ir indexRequest) error {
 		Args: enc,
 	}
 
-	return qc.Enqueue(&j)
+	return qe.Qc.Enqueue(&j)
 }
 
 // getIndexRequest from the body and further validate it.
@@ -96,14 +92,7 @@ func main() {
 		log.WithField("PORT", port).Fatal("$PORT must be set")
 	}
 
-	dbURL := os.Getenv("DATABASE_URL")
-	pgxpool, err := qe.GetPgxPool(dbURL)
-	if err != nil {
-		log.WithField("DATABASE_URL", dbURL).Fatal(err)
-	}
-	defer pgxpool.Close()
-
-	qc = que.NewClient(pgxpool)
+	defer qe.PgxPool.Close()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/index", handleIndexRequest)
