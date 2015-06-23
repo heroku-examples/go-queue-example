@@ -1,21 +1,20 @@
 package go_queue_example
 
 import (
-	"os"
-
-	log "github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/Sirupsen/logrus"
 	que "github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/bgentry/que-go"
 	"github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/jackc/pgx"
 )
 
+// IndexRequest container.
+// The URL is the url to index content from.
 type IndexRequest struct {
 	URL string `json:url`
 }
 
 const (
-	IndexRequestJob = "IndexRequests"
+	IndexRequestJob = "IndexRequests" // IndexRequestJob queue name
 
-	TableSQL = `
+	QueTableSQL = `
 		CREATE TABLE IF NOT EXISTS que_jobs
 		(
 			priority    smallint    NOT NULL DEFAULT 100,
@@ -28,19 +27,13 @@ const (
 			queue       text        NOT NULL DEFAULT '',
 
 			CONSTRAINT que_jobs_pkey PRIMARY KEY (queue, priority, run_at, job_id)
-		);
-	`
-)
-
-var (
-	PgxPool *pgx.ConnPool
-	Qc      *que.Client
+		);` // QueTableSQL to create table idempotently
 )
 
 // prepQue ensures that the que table exists and que's prepared statements are
 // run. It is meant to be used in a pgx.ConnPool's AfterConnect hook.
 func prepQue(conn *pgx.Conn) error {
-	_, err := conn.Exec(TableSQL)
+	_, err := conn.Exec(QueTableSQL)
 	if err != nil {
 		return err
 	}
@@ -67,14 +60,16 @@ func GetPgxPool(dbURL string) (*pgx.ConnPool, error) {
 	return pgxpool, nil
 }
 
-func init() {
-	var err error
-
-	dbURL := os.Getenv("DATABASE_URL")
-	PgxPool, err = GetPgxPool(dbURL)
+// Setup a *pgx.ConnPool and *que.Client
+// This is here so that setup routines can easily be shared between web and
+// workers
+func Setup(dbURL string) (*pgx.ConnPool, *que.Client, error) {
+	pgxpool, err := GetPgxPool(dbURL)
 	if err != nil {
-		log.WithField("DATABASE_URL", dbURL).Fatal(err)
+		return nil, nil, err
 	}
 
-	Qc = que.NewClient(PgxPool)
+	qc := que.NewClient(pgxpool)
+
+	return pgxpool, qc, err
 }

@@ -12,8 +12,14 @@ import (
 	qe "github.com/heroku-examples/go_queue_example"
 
 	log "github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/Sirupsen/logrus"
-	"github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/bgentry/que-go"
+	que "github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/bgentry/que-go"
 	"github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/codegangsta/negroni"
+	"github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/jackc/pgx"
+)
+
+var (
+	qc      *que.Client
+	pgxpool *pgx.ConnPool
 )
 
 // queueIndexRequest into the que as an encoded JSON object
@@ -28,7 +34,7 @@ func queueIndexRequest(ir qe.IndexRequest) error {
 		Args: enc,
 	}
 
-	return qe.Qc.Enqueue(&j)
+	return qc.Enqueue(&j)
 }
 
 // getIndexRequest from the body and further validate it.
@@ -78,12 +84,19 @@ func handleIndexRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	var err error
 	port := os.Getenv("PORT")
 	if port == "" {
 		log.WithField("PORT", port).Fatal("$PORT must be set")
 	}
 
-	defer qe.PgxPool.Close()
+	dbURL := os.Getenv("DATABASE_URL")
+	pgxpool, qc, err = qe.Setup(dbURL)
+	if err != nil {
+		log.WithField("DATABASE_URL", dbURL).Fatal("Unable to setup queue / database")
+	}
+
+	defer pgxpool.Close()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/index", handleIndexRequest)
