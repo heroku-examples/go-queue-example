@@ -92,7 +92,7 @@ func handleIndexRequest(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	port := os.Getenv("PORT")
-	if port != "" {
+	if port == "" {
 		log.WithField("PORT", port).Fatal("$PORT must be set")
 	}
 

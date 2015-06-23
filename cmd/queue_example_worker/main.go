@@ -22,11 +22,6 @@ func indexURLJob(j *que.Job) error {
 }
 
 func main() {
-	port := os.Getenv("PORT")
-	if port != "" {
-		log.WithField("PORT", port).Fatal("$PORT must be set")
-	}
-
 	dbURL := os.Getenv("DATABASE_URL")
 	pgxpool, err := qe.GetPgxPool(dbURL)
 	if err != nil {
