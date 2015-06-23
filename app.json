@@ -14,7 +14,7 @@
     "heroku-postgresql"
   ],
   "formation": [
-    {"process": "web", "quantity": 1, "size": "1X"},
-    {"process": "worker", "quantity": 1, "size": "1X"}
+    {"process": "web", "quantity": 1, "size": "Standard-1X"},
+    {"process": "worker", "quantity": 1, "size": "Standard-1X"}
   ]
 }
