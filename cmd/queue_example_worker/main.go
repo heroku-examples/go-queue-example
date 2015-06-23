@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,7 +14,16 @@ import (
 
 // indexURLJob would do whatever indexing is necessary in the background
 func indexURLJob(j *que.Job) error {
-	log.WithField("job", j).Info("Processing Job Now! (not really)")
+	var ir qe.IndexRequest
+	err := json.Unmarshal(j.Args, &ir)
+	if err != nil {
+		log.WithField("args", string(j.Args)).Error("Unable to unmarshal job arguments into IndexRequest")
+		return err
+	}
+
+	log.WithField("IndexRequest", ir).Info("Processing IndexRequest! (not really)")
+	// You would do real work here...
+
 	return nil
 }
 

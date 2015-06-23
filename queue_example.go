@@ -8,6 +8,10 @@ import (
 	"github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/jackc/pgx"
 )
 
+type IndexRequest struct {
+	URL string `json:url`
+}
+
 const (
 	IndexRequestJob = "IndexRequests"
 

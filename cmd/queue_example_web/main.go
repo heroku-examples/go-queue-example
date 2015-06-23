@@ -16,12 +16,8 @@ import (
 	"github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/codegangsta/negroni"
 )
 
-type indexRequest struct {
-	URL string `json:url`
-}
-
 // queueIndexRequest into the que as an encoded JSON object
-func queueIndexRequest(ir indexRequest) error {
+func queueIndexRequest(ir qe.IndexRequest) error {
 	enc, err := json.Marshal(ir)
 	if err != nil {
 		return err
@@ -36,8 +32,8 @@ func queueIndexRequest(ir indexRequest) error {
 }
 
 // getIndexRequest from the body and further validate it.
-func getIndexRequest(r io.Reader) (indexRequest, error) {
-	var ir indexRequest
+func getIndexRequest(r io.Reader) (qe.IndexRequest, error) {
+	var ir qe.IndexRequest
 	rd := json.NewDecoder(r)
 	if err := rd.Decode(&ir); err != nil {
 		return ir, fmt.Errorf("Error decoding JSON body.")
