@@ -11,9 +11,9 @@ import (
 
 	qe "github.com/heroku-examples/go_queue_example"
 
-	log "github.com/Sirupsen/logrus"
-	"github.com/bgentry/que-go"
-	"github.com/codegangsta/negroni"
+	log "github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/Sirupsen/logrus"
+	"github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/bgentry/que-go"
+	"github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/codegangsta/negroni"
 )
 
 var (

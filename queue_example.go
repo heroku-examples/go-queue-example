@@ -1,8 +1,8 @@
 package go_queue_example
 
 import (
-	"github.com/bgentry/que-go"
-	"github.com/jackc/pgx"
+	"github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/bgentry/que-go"
+	"github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/jackc/pgx"
 )
 
 const (
