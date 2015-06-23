@@ -79,7 +79,7 @@ func handleIndexRequest(w http.ResponseWriter, r *http.Request) {
 	case "POST":
 		handlePostIndexRequest(w, r)
 	default:
-		http.Error(w, "Invalud http method. Only GET & POST accepted.", http.StatusBadRequest)
+		http.Error(w, "Invalid http method. Only POST is accepted.", http.StatusBadRequest)
 	}
 }
 
