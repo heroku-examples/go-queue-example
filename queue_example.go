@@ -33,6 +33,15 @@ var (
 	Qc      *que.Client
 )
 
+func prepQue(conn *pgx.Conn) error {
+	_, err := conn.Exec(TableSQL)
+	if err != nil {
+		return err
+	}
+
+	return que.PrepareStatements(conn)
+}
+
 func GetPgxPool(dbURL string) (*pgx.ConnPool, error) {
 	pgxcfg, err := pgx.ParseURI(dbURL)
 	if err != nil {
@@ -41,7 +50,7 @@ func GetPgxPool(dbURL string) (*pgx.ConnPool, error) {
 
 	pgxpool, err := pgx.NewConnPool(pgx.ConnPoolConfig{
 		ConnConfig:   pgxcfg,
-		AfterConnect: que.PrepareStatements,
+		AfterConnect: prepQue,
 	})
 
 	if err != nil {
@@ -58,11 +67,6 @@ func init() {
 	PgxPool, err = GetPgxPool(dbURL)
 	if err != nil {
 		log.WithField("DATABASE_URL", dbURL).Fatal(err)
-	}
-
-	_, err = PgxPool.Exec(TableSQL)
-	if err != nil {
-		log.WithField("SQL", TableSQL).Fatal("Error creating table: ", err)
 	}
 
 	Qc = que.NewClient(PgxPool)
