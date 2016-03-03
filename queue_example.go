@@ -1,8 +1,8 @@
 package go_queue_example
 
 import (
-	que "github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/bgentry/que-go"
-	"github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/jackc/pgx"
+	que "github.com/bgentry/que-go"
+	"github.com/jackc/pgx"
 )
 
 // IndexRequest container.

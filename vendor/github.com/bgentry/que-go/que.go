@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/jackc/pgx"
+	"github.com/jackc/pgx"
 )
 
 // Job is a single unit of work for Que to perform.

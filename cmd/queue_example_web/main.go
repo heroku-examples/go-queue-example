@@ -11,10 +11,10 @@ import (
 
 	qe "github.com/heroku-examples/go_queue_example"
 
-	log "github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/Sirupsen/logrus"
-	que "github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/bgentry/que-go"
-	"github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/codegangsta/negroni"
-	"github.com/heroku-examples/go_queue_example/Godeps/_workspace/src/github.com/jackc/pgx"
+	log "github.com/Sirupsen/logrus"
+	que "github.com/bgentry/que-go"
+	"github.com/codegangsta/negroni"
+	"github.com/jackc/pgx"
 )
 
 var (
