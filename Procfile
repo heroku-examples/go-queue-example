@@ -1,3 +1,3 @@
-web: queue_example_web
-worker: queue_example_worker
+web: queue-example-web
+worker: queue-example-worker
 release: psql $DATABASE_URL < vendor/github.com/bgentry/que-go/schema.sql
