@@ -33,7 +33,9 @@ type ConnConfig struct {
 	UseFallbackTLS    bool        // Try FallbackTLSConfig if connecting with TLSConfig fails. Used for preferring TLS, but allowing unencrypted, or vice-versa
 	FallbackTLSConfig *tls.Config // config for fallback TLS connection (only used if UseFallBackTLS is true)-- nil disables TLS
 	Logger            Logger
+	LogLevel          int
 	Dial              DialFunc
+	RuntimeParams     map[string]string // Run-time parameters to set on connection as session default values (e.g. search_path or application_name)
 }
 
 // Conn is a PostgreSQL connection handle. It is not safe for concurrent usage.
@@ -51,16 +53,23 @@ type Conn struct {
 	config             ConnConfig        // config used when establishing this connection
 	TxStatus           byte
 	preparedStatements map[string]*PreparedStatement
+	channels           map[string]struct{}
 	notifications      []*Notification
 	alive              bool
 	causeOfDeath       error
 	logger             Logger
+	logLevel           int
 	mr                 msgReader
 	fp                 *fastpath
+	pgsql_af_inet      byte
+	pgsql_af_inet6     byte
+	busy               bool
+	poolResetCount     int
 }
 
 type PreparedStatement struct {
 	Name              string
+	SQL               string
 	FieldDescriptions []FieldDescription
 	ParameterOids     []Oid
 }
@@ -94,6 +103,8 @@ var ErrNoRows = errors.New("no rows in result set")
 var ErrNotificationTimeout = errors.New("notification timeout")
 var ErrDeadConn = errors.New("conn is dead")
 var ErrTLSRefused = errors.New("server refused TLS connection")
+var ErrConnBusy = errors.New("conn is busy")
+var ErrInvalidLogLevel = errors.New("invalid log level")
 
 type ProtocolError string
 
@@ -108,11 +119,16 @@ func Connect(config ConnConfig) (c *Conn, err error) {
 	c = new(Conn)
 
 	c.config = config
-	if c.config.Logger != nil {
-		c.logger = c.config.Logger
+
+	if c.config.LogLevel != 0 {
+		c.logLevel = c.config.LogLevel
 	} else {
-		c.logger = dlogger
+		// Preserve pre-LogLevel behavior by defaulting to LogLevelDebug
+		c.logLevel = LogLevelDebug
 	}
+	c.logger = c.config.Logger
+	c.mr.log = c.log
+	c.mr.shouldLog = c.shouldLog
 
 	if c.config.User == "" {
 		user, err := user.Current()
@@ -120,12 +136,16 @@ func Connect(config ConnConfig) (c *Conn, err error) {
 			return nil, err
 		}
 		c.config.User = user.Username
-		c.logger.Debug("Using default connection config", "User", c.config.User)
+		if c.shouldLog(LogLevelDebug) {
+			c.log(LogLevelDebug, "Using default connection config", "User", c.config.User)
+		}
 	}
 
 	if c.config.Port == 0 {
 		c.config.Port = 5432
-		c.logger.Debug("Using default connection config", "Port", c.config.Port)
+		if c.shouldLog(LogLevelDebug) {
+			c.log(LogLevelDebug, "Using default connection config", "Port", c.config.Port)
+		}
 	}
 
 	network := "tcp"
@@ -156,29 +176,40 @@ func Connect(config ConnConfig) (c *Conn, err error) {
 }
 
 func (c *Conn) connect(config ConnConfig, network, address string, tlsConfig *tls.Config) (err error) {
-	c.logger.Info(fmt.Sprintf("Dialing PostgreSQL server at %s address: %s", network, address))
+	if c.shouldLog(LogLevelInfo) {
+		c.log(LogLevelInfo, fmt.Sprintf("Dialing PostgreSQL server at %s address: %s", network, address))
+	}
 	c.conn, err = c.config.Dial(network, address)
 	if err != nil {
-		c.logger.Error(fmt.Sprintf("Connection failed: %v", err))
+		if c.shouldLog(LogLevelError) {
+			c.log(LogLevelError, fmt.Sprintf("Connection failed: %v", err))
+		}
 		return err
 	}
 	defer func() {
 		if c != nil && err != nil {
 			c.conn.Close()
 			c.alive = false
-			c.logger.Error(err.Error())
+			if c.shouldLog(LogLevelError) {
+				c.log(LogLevelError, err.Error())
+			}
 		}
 	}()
 
 	c.RuntimeParams = make(map[string]string)
 	c.preparedStatements = make(map[string]*PreparedStatement)
+	c.channels = make(map[string]struct{})
 	c.alive = true
 	c.lastActivityTime = time.Now()
 
 	if tlsConfig != nil {
-		c.logger.Debug("Starting TLS handshake")
+		if c.shouldLog(LogLevelDebug) {
+			c.log(LogLevelDebug, "Starting TLS handshake")
+		}
 		if err := c.startTLS(tlsConfig); err != nil {
-			c.logger.Error(fmt.Sprintf("TLS failed: %v", err))
+			if c.shouldLog(LogLevelError) {
+				c.log(LogLevelError, fmt.Sprintf("TLS failed: %v", err))
+			}
 			return err
 		}
 	}
@@ -187,10 +218,25 @@ func (c *Conn) connect(config ConnConfig, network, address string, tlsConfig *tl
 	c.mr.reader = c.reader
 
 	msg := newStartupMessage()
+
+	// Default to disabling TLS renegotiation.
+	//
+	// Go does not support (https://github.com/golang/go/issues/5742)
+	// PostgreSQL recommends disabling (http://www.postgresql.org/docs/9.4/static/runtime-config-connection.html#GUC-SSL-RENEGOTIATION-LIMIT)
+	if tlsConfig != nil {
+		msg.options["ssl_renegotiation_limit"] = "0"
+	}
+
+	// Copy default run-time params
+	for k, v := range config.RuntimeParams {
+		msg.options[k] = v
+	}
+
 	msg.options["user"] = c.config.User
 	if c.config.Database != "" {
 		msg.options["database"] = c.config.Database
 	}
+
 	if err = c.txStartupMessage(msg); err != nil {
 		return err
 	}
@@ -212,12 +258,16 @@ func (c *Conn) connect(config ConnConfig, network, address string, tlsConfig *tl
 			}
 		case readyForQuery:
 			c.rxReadyForQuery(r)
-			if c.logger != dlogger {
-				c.logger = &connLogger{logger: c.logger, pid: c.Pid}
-				c.logger.Info("Connection established")
+			if c.shouldLog(LogLevelInfo) {
+				c.log(LogLevelInfo, "Connection established")
 			}
 
 			err = c.loadPgTypes()
+			if err != nil {
+				return err
+			}
+
+			err = c.loadInetConstants()
 			if err != nil {
 				return err
 			}
@@ -254,6 +304,23 @@ func (c *Conn) loadPgTypes() error {
 	return rows.Err()
 }
 
+// Family is needed for binary encoding of inet/cidr. The constant is based on
+// the server's definition of AF_INET. In theory, this could differ between
+// platforms, so request an IPv4 and an IPv6 inet and get the family from that.
+func (c *Conn) loadInetConstants() error {
+	var ipv4, ipv6 []byte
+
+	err := c.QueryRow("select '127.0.0.1'::inet, '1::'::inet").Scan(&ipv4, &ipv6)
+	if err != nil {
+		return err
+	}
+
+	c.pgsql_af_inet = ipv4[0]
+	c.pgsql_af_inet6 = ipv6[0]
+
+	return nil
+}
+
 // Close closes a connection. It is safe to call Close on a already closed
 // connection.
 func (c *Conn) Close() (err error) {
@@ -261,17 +328,21 @@ func (c *Conn) Close() (err error) {
 		return nil
 	}
 
-	wbuf := newWriteBuf(c.wbuf[0:0], 'X')
+	wbuf := newWriteBuf(c, 'X')
 	wbuf.closeMsg()
 
 	_, err = c.conn.Write(wbuf.buf)
 
 	c.die(errors.New("Closed"))
-	c.logger.Info("Closed connection")
+	if c.shouldLog(LogLevelInfo) {
+		c.log(LogLevelInfo, "Closed connection")
+	}
 	return err
 }
 
 // ParseURI parses a database URI into ConnConfig
+//
+// Query parameters not used by the connection process are parsed into ConnConfig.RuntimeParams.
 func ParseURI(uri string) (ConnConfig, error) {
 	var cp ConnConfig
 
@@ -296,18 +367,49 @@ func ParseURI(uri string) (ConnConfig, error) {
 	}
 	cp.Database = strings.TrimLeft(url.Path, "/")
 
+	err = configSSL(url.Query().Get("sslmode"), &cp)
+	if err != nil {
+		return cp, err
+	}
+
+	ignoreKeys := map[string]struct{}{
+		"sslmode": struct{}{},
+	}
+
+	cp.RuntimeParams = make(map[string]string)
+
+	for k, v := range url.Query() {
+		if _, ok := ignoreKeys[k]; ok {
+			continue
+		}
+
+		cp.RuntimeParams[k] = v[0]
+	}
+
 	return cp, nil
 }
 
-var dsn_regexp = regexp.MustCompile(`([a-z]+)=((?:"[^"]+")|(?:[^ ]+))`)
+var dsn_regexp = regexp.MustCompile(`([a-zA-Z_]+)=((?:"[^"]+")|(?:[^ ]+))`)
 
 // ParseDSN parses a database DSN (data source name) into a ConnConfig
 //
-// e.g. ParseDSN("user=username password=password host=1.2.3.4 port=5432 dbname=mydb")
+// e.g. ParseDSN("user=username password=password host=1.2.3.4 port=5432 dbname=mydb sslmode=disable")
+//
+// Any options not used by the connection process are parsed into ConnConfig.RuntimeParams.
+//
+// e.g. ParseDSN("application_name=pgxtest search_path=admin user=username password=password host=1.2.3.4 dbname=mydb")
+//
+// ParseDSN tries to match libpq behavior with regard to sslmode. See comments
+// for ParseEnvLibpq for more information on the security implications of
+// sslmode options.
 func ParseDSN(s string) (ConnConfig, error) {
 	var cp ConnConfig
 
 	m := dsn_regexp.FindAllStringSubmatch(s, -1)
+
+	var sslmode string
+
+	cp.RuntimeParams = make(map[string]string)
 
 	for _, b := range m {
 		switch b[1] {
@@ -325,7 +427,16 @@ func ParseDSN(s string) (ConnConfig, error) {
 			}
 		case "dbname":
 			cp.Database = b[2]
+		case "sslmode":
+			sslmode = b[2]
+		default:
+			cp.RuntimeParams[b[1]] = b[2]
 		}
+	}
+
+	err := configSSL(sslmode, &cp)
+	if err != nil {
+		return cp, err
 	}
 
 	return cp, nil
@@ -343,6 +454,7 @@ func ParseDSN(s string) (ConnConfig, error) {
 // PGUSER
 // PGPASSWORD
 // PGSSLMODE
+// PGAPPNAME
 //
 // Important TLS Security Notes:
 // ParseEnvLibpq tries to match libpq behavior with regard to PGSSLMODE. This
@@ -352,9 +464,9 @@ func ParseDSN(s string) (ConnConfig, error) {
 // for details on what level of security each sslmode provides.
 //
 // "require" and "verify-ca" modes currently are treated as "verify-full". e.g.
-// "They have stronger security guarantees than they would with libpq. Do not
-// "rely on this behavior as it may be possible to match libpq in the match. If
-// "you need full security use "verify-full".
+// They have stronger security guarantees than they would with libpq. Do not
+// rely on this behavior as it may be possible to match libpq in the future. If
+// you need full security use "verify-full".
 //
 // Several of the PGSSLMODE options (including the default behavior of "prefer")
 // will set UseFallbackTLS to true and FallbackTLSConfig to a disabled or
@@ -380,6 +492,20 @@ func ParseEnvLibpq() (ConnConfig, error) {
 
 	sslmode := os.Getenv("PGSSLMODE")
 
+	err := configSSL(sslmode, &cc)
+	if err != nil {
+		return cc, err
+	}
+
+	cc.RuntimeParams = make(map[string]string)
+	if appname := os.Getenv("PGAPPNAME"); appname != "" {
+		cc.RuntimeParams["application_name"] = appname
+	}
+
+	return cc, nil
+}
+
+func configSSL(sslmode string, cc *ConnConfig) error {
 	// Match libpq default behavior
 	if sslmode == "" {
 		sslmode = "prefer"
@@ -399,23 +525,35 @@ func ParseEnvLibpq() (ConnConfig, error) {
 			ServerName: cc.Host,
 		}
 	default:
-		return cc, errors.New("sslmode is invalid")
+		return errors.New("sslmode is invalid")
 	}
 
-	return cc, nil
+	return nil
 }
 
 // Prepare creates a prepared statement with name and sql. sql can contain placeholders
 // for bound parameters. These placeholders are referenced positional as $1, $2, etc.
+//
+// Prepare is idempotent; i.e. it is safe to call Prepare multiple times with the same
+// name and sql arguments. This allows a code path to Prepare and Query/Exec without
+// concern for if the statement has already been prepared.
 func (c *Conn) Prepare(name, sql string) (ps *PreparedStatement, err error) {
-	defer func() {
-		if err != nil {
-			c.logger.Error(fmt.Sprintf("Prepare `%s` as `%s` failed: %v", name, sql, err))
+	if name != "" {
+		if ps, ok := c.preparedStatements[name]; ok && ps.SQL == sql {
+			return ps, nil
 		}
-	}()
+	}
+
+	if c.shouldLog(LogLevelError) {
+		defer func() {
+			if err != nil {
+				c.log(LogLevelError, fmt.Sprintf("Prepare `%s` as `%s` failed: %v", name, sql, err))
+			}
+		}()
+	}
 
 	// parse
-	wbuf := newWriteBuf(c.wbuf[0:0], 'P')
+	wbuf := newWriteBuf(c, 'P')
 	wbuf.WriteCString(name)
 	wbuf.WriteCString(sql)
 	wbuf.WriteInt16(0)
@@ -431,10 +569,11 @@ func (c *Conn) Prepare(name, sql string) (ps *PreparedStatement, err error) {
 
 	_, err = c.conn.Write(wbuf.buf)
 	if err != nil {
+		c.die(err)
 		return nil, err
 	}
 
-	ps = &PreparedStatement{Name: name}
+	ps = &PreparedStatement{Name: name, SQL: sql}
 
 	var softErr error
 
@@ -482,7 +621,7 @@ func (c *Conn) Deallocate(name string) (err error) {
 	delete(c.preparedStatements, name)
 
 	// close
-	wbuf := newWriteBuf(c.wbuf[0:0], 'C')
+	wbuf := newWriteBuf(c, 'C')
 	wbuf.WriteByte('S')
 	wbuf.WriteCString(name)
 
@@ -492,6 +631,7 @@ func (c *Conn) Deallocate(name string) (err error) {
 
 	_, err = c.conn.Write(wbuf.buf)
 	if err != nil {
+		c.die(err)
 		return err
 	}
 
@@ -516,9 +656,26 @@ func (c *Conn) Deallocate(name string) (err error) {
 }
 
 // Listen establishes a PostgreSQL listen/notify to channel
-func (c *Conn) Listen(channel string) (err error) {
-	_, err = c.Exec("listen " + channel)
-	return
+func (c *Conn) Listen(channel string) error {
+	_, err := c.Exec("listen " + quoteIdentifier(channel))
+	if err != nil {
+		return err
+	}
+
+	c.channels[channel] = struct{}{}
+
+	return nil
+}
+
+// Unlisten unsubscribes from a listen channel
+func (c *Conn) Unlisten(channel string) error {
+	_, err := c.Exec("unlisten " + quoteIdentifier(channel))
+	if err != nil {
+		return err
+	}
+
+	delete(c.channels, channel)
+	return nil
 }
 
 // WaitForNotification waits for a PostgreSQL notification for up to timeout.
@@ -640,7 +797,7 @@ func (c *Conn) sendQuery(sql string, arguments ...interface{}) (err error) {
 
 func (c *Conn) sendSimpleQuery(sql string, args ...interface{}) error {
 	if len(args) == 0 {
-		wbuf := newWriteBuf(c.wbuf[0:0], 'Q')
+		wbuf := newWriteBuf(c, 'Q')
 		wbuf.WriteCString(sql)
 		wbuf.closeMsg()
 
@@ -667,7 +824,7 @@ func (c *Conn) sendPreparedQuery(ps *PreparedStatement, arguments ...interface{}
 	}
 
 	// bind
-	wbuf := newWriteBuf(c.wbuf[0:0], 'B')
+	wbuf := newWriteBuf(c, 'B')
 	wbuf.WriteByte(0)
 	wbuf.WriteCString(ps.Name)
 
@@ -676,11 +833,11 @@ func (c *Conn) sendPreparedQuery(ps *PreparedStatement, arguments ...interface{}
 		switch arg := arguments[i].(type) {
 		case Encoder:
 			wbuf.WriteInt16(arg.FormatCode())
-		case string:
+		case string, *string:
 			wbuf.WriteInt16(TextFormatCode)
 		default:
 			switch oid {
-			case BoolOid, ByteaOid, Int2Oid, Int4Oid, Int8Oid, Float4Oid, Float8Oid, TimestampTzOid, TimestampTzArrayOid, TimestampOid, TimestampArrayOid, BoolArrayOid, Int2ArrayOid, Int4ArrayOid, Int8ArrayOid, Float4ArrayOid, Float8ArrayOid, TextArrayOid, VarcharArrayOid, OidOid:
+			case BoolOid, ByteaOid, Int2Oid, Int4Oid, Int8Oid, Float4Oid, Float8Oid, TimestampTzOid, TimestampTzArrayOid, TimestampOid, TimestampArrayOid, DateOid, BoolArrayOid, Int2ArrayOid, Int4ArrayOid, Int8ArrayOid, Float4ArrayOid, Float8ArrayOid, TextArrayOid, VarcharArrayOid, OidOid, InetOid, CidrOid, InetArrayOid, CidrArrayOid:
 				wbuf.WriteInt16(BinaryFormatCode)
 			default:
 				wbuf.WriteInt16(TextFormatCode)
@@ -690,67 +847,7 @@ func (c *Conn) sendPreparedQuery(ps *PreparedStatement, arguments ...interface{}
 
 	wbuf.WriteInt16(int16(len(arguments)))
 	for i, oid := range ps.ParameterOids {
-		if arguments[i] == nil {
-			wbuf.WriteInt32(-1)
-			continue
-		}
-
-		switch arg := arguments[i].(type) {
-		case Encoder:
-			err = arg.Encode(wbuf, oid)
-		case string:
-			err = encodeText(wbuf, arguments[i])
-		default:
-			switch oid {
-			case BoolOid:
-				err = encodeBool(wbuf, arguments[i])
-			case ByteaOid:
-				err = encodeBytea(wbuf, arguments[i])
-			case Int2Oid:
-				err = encodeInt2(wbuf, arguments[i])
-			case Int4Oid:
-				err = encodeInt4(wbuf, arguments[i])
-			case Int8Oid:
-				err = encodeInt8(wbuf, arguments[i])
-			case Float4Oid:
-				err = encodeFloat4(wbuf, arguments[i])
-			case Float8Oid:
-				err = encodeFloat8(wbuf, arguments[i])
-			case TextOid, VarcharOid:
-				err = encodeText(wbuf, arguments[i])
-			case DateOid:
-				err = encodeDate(wbuf, arguments[i])
-			case TimestampTzOid:
-				err = encodeTimestampTz(wbuf, arguments[i])
-			case TimestampOid:
-				err = encodeTimestamp(wbuf, arguments[i])
-			case BoolArrayOid:
-				err = encodeBoolArray(wbuf, arguments[i])
-			case Int2ArrayOid:
-				err = encodeInt2Array(wbuf, arguments[i])
-			case Int4ArrayOid:
-				err = encodeInt4Array(wbuf, arguments[i])
-			case Int8ArrayOid:
-				err = encodeInt8Array(wbuf, arguments[i])
-			case Float4ArrayOid:
-				err = encodeFloat4Array(wbuf, arguments[i])
-			case Float8ArrayOid:
-				err = encodeFloat8Array(wbuf, arguments[i])
-			case TextArrayOid:
-				err = encodeTextArray(wbuf, arguments[i], TextOid)
-			case VarcharArrayOid:
-				err = encodeTextArray(wbuf, arguments[i], VarcharOid)
-			case TimestampArrayOid:
-				err = encodeTimestampArray(wbuf, arguments[i], TimestampOid)
-			case TimestampTzArrayOid:
-				err = encodeTimestampArray(wbuf, arguments[i], TimestampTzOid)
-			case OidOid:
-				err = encodeOid(wbuf, arguments[i])
-			default:
-				return SerializationError(fmt.Sprintf("Cannot encode %T into oid %v - %T must implement Encoder or be converted to a string", arg, oid, arg))
-			}
-		}
-		if err != nil {
+		if err := Encode(wbuf, oid, arguments[i]); err != nil {
 			return err
 		}
 	}
@@ -780,19 +877,29 @@ func (c *Conn) sendPreparedQuery(ps *PreparedStatement, arguments ...interface{}
 // Exec executes sql. sql can be either a prepared statement name or an SQL string.
 // arguments should be referenced positionally from the sql string as $1, $2, etc.
 func (c *Conn) Exec(sql string, arguments ...interface{}) (commandTag CommandTag, err error) {
+	if err = c.lock(); err != nil {
+		return commandTag, err
+	}
+
 	startTime := time.Now()
 	c.lastActivityTime = startTime
 
-	if c.logger != dlogger {
-		defer func() {
-			if err == nil {
+	defer func() {
+		if err == nil {
+			if c.shouldLog(LogLevelInfo) {
 				endTime := time.Now()
-				c.logger.Info("Exec", "sql", sql, "args", logQueryArgs(arguments), "time", endTime.Sub(startTime), "commandTag", commandTag)
-			} else {
-				c.logger.Error("Exec", "sql", sql, "args", logQueryArgs(arguments), "error", err)
+				c.log(LogLevelInfo, "Exec", "sql", sql, "args", logQueryArgs(arguments), "time", endTime.Sub(startTime), "commandTag", commandTag)
 			}
-		}()
-	}
+		} else {
+			if c.shouldLog(LogLevelError) {
+				c.log(LogLevelError, "Exec", "sql", sql, "args", logQueryArgs(arguments), "error", err)
+			}
+		}
+
+		if unlockErr := c.unlock(); unlockErr != nil && err == nil {
+			err = unlockErr
+		}
+	}()
 
 	if err = c.sendQuery(sql, arguments...); err != nil {
 		return
@@ -858,6 +965,10 @@ func (c *Conn) rxMsg() (t byte, r *msgReader, err error) {
 	}
 
 	c.lastActivityTime = time.Now()
+
+	if c.shouldLog(LogLevelTrace) {
+		c.log(LogLevelTrace, "rxMsg", "type", string(t), "msgBytesRemaining", c.mr.msgBytesRemaining)
+	}
 
 	return t, &c.mr, err
 }
@@ -1021,7 +1132,7 @@ func (c *Conn) txStartupMessage(msg *startupMessage) error {
 }
 
 func (c *Conn) txPasswordMessage(password string) (err error) {
-	wbuf := newWriteBuf(c.wbuf[0:0], 'p')
+	wbuf := newWriteBuf(c, 'p')
 	wbuf.WriteCString(password)
 	wbuf.closeMsg()
 
@@ -1034,4 +1145,67 @@ func (c *Conn) die(err error) {
 	c.alive = false
 	c.causeOfDeath = err
 	c.conn.Close()
+}
+
+func (c *Conn) lock() error {
+	if c.busy {
+		return ErrConnBusy
+	}
+	c.busy = true
+	return nil
+}
+
+func (c *Conn) unlock() error {
+	if !c.busy {
+		return errors.New("unlock conn that is not busy")
+	}
+	c.busy = false
+	return nil
+}
+
+func (c *Conn) shouldLog(lvl int) bool {
+	return c.logger != nil && c.logLevel >= lvl
+}
+
+func (c *Conn) log(lvl int, msg string, ctx ...interface{}) {
+	if c.Pid != 0 {
+		ctx = append(ctx, "pid", c.Pid)
+	}
+
+	switch lvl {
+	case LogLevelTrace:
+		c.logger.Debug(msg, ctx...)
+	case LogLevelDebug:
+		c.logger.Debug(msg, ctx...)
+	case LogLevelInfo:
+		c.logger.Info(msg, ctx...)
+	case LogLevelWarn:
+		c.logger.Warn(msg, ctx...)
+	case LogLevelError:
+		c.logger.Error(msg, ctx...)
+	}
+}
+
+// SetLogger replaces the current logger and returns the previous logger.
+func (c *Conn) SetLogger(logger Logger) Logger {
+	oldLogger := c.logger
+	c.logger = logger
+	return oldLogger
+}
+
+// SetLogLevel replaces the current log level and returns the previous log
+// level.
+func (c *Conn) SetLogLevel(lvl int) (int, error) {
+	oldLvl := c.logLevel
+
+	if lvl < LogLevelNone || lvl > LogLevelTrace {
+		return oldLvl, ErrInvalidLogLevel
+	}
+
+	c.logLevel = lvl
+	return lvl, nil
+}
+
+func quoteIdentifier(s string) string {
+	return `"` + strings.Replace(s, `"`, `""`, -1) + `"`
 }

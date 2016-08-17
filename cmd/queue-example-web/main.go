@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	qe "github.com/heroku-examples/go_queue_example"
+	qe "github.com/heroku-examples/go-queue-example"
 
 	log "github.com/Sirupsen/logrus"
 	que "github.com/bgentry/que-go"
