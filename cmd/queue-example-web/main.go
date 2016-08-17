@@ -93,7 +93,6 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	if _, err := io.WriteString(w, `Usage: curl -XPOST "https://<app name>.herokuapp.com/index" -d '{"url": "http://google.com"}'`); err != nil {
 		l.Println(err.Error())
 	}
-	w.WriteHeader(http.StatusOK)
 }
 
 func main() {
