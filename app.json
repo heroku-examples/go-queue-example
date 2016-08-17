@@ -14,5 +14,13 @@
   "repository": "http://github.com/heroku-examples/go_queue_example",
   "addons": [
     "heroku-postgresql"
-  ]
+  ],
+  "formation":{
+    "web":{
+      "quantity":1
+    },
+    "worker":{
+      "quantity":1
+    }
+  }
 }
