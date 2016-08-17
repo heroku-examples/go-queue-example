@@ -2,8 +2,6 @@
 
 [![Deploy](https://www.herokucdn.com/deploy/button.png)](https://heroku.com/deploy)
 
-Note: After you click the button you need to `heroku ps:scale worker=1 -a <app name>` or the [dashboard](https://heroku.com) equivalent.
-
 Go based Queue / Background Worker API only example.
 
 After app setup you can test with the following commands:

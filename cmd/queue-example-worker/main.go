@@ -6,14 +6,15 @@ import (
 	"os/signal"
 	"syscall"
 
-	qe "github.com/heroku-examples/go-queue-example"
-
-	log "github.com/Sirupsen/logrus"
+	"github.com/Sirupsen/logrus"
 	"github.com/bgentry/que-go"
+	qe "github.com/heroku-examples/go-queue-example"
 	"github.com/jackc/pgx"
+	"github.com/pkg/errors"
 )
 
 var (
+	log     = logrus.WithField("cmd", "queue-example-worker")
 	qc      *que.Client
 	pgxpool *pgx.ConnPool
 )
@@ -21,10 +22,8 @@ var (
 // indexURLJob would do whatever indexing is necessary in the background
 func indexURLJob(j *que.Job) error {
 	var ir qe.IndexRequest
-	err := json.Unmarshal(j.Args, &ir)
-	if err != nil {
-		log.WithField("args", string(j.Args)).Error("Unable to unmarshal job arguments into IndexRequest")
-		return err
+	if err := json.Unmarshal(j.Args, &ir); err != nil {
+		return errors.Wrap(err, "Unable to unmarshal job arguments into IndexRequest: "+string(j.Args))
 	}
 
 	log.WithField("IndexRequest", ir).Info("Processing IndexRequest! (not really)")

@@ -1,9 +1,11 @@
 {
 	"comment": "",
-	"ignore": "test",
 	"heroku": {
-		"install": ["./cmd/..."]
+		"install": [
+			"./cmd/..."
+		]
 	},
+	"ignore": "test solaris",
 	"package": [
 		{
 			"checksumSHA1": "DWPL08pD/SQ2GzLfoR7ZXnjj7Sw=",
@@ -16,14 +18,15 @@
 			"revision": "e2fa4b8f0b5ef9ca86ab2d59f0ace88b96ac1a50"
 		},
 		{
-			"checksumSHA1": "dnj6px0tS6k2tKIqK4wCW+4bXjk=",
-			"path": "github.com/codegangsta/negroni",
-			"revision": "c7477ad8e330bef55bf1ebe300cf8aa67c492d1b"
-		},
-		{
 			"checksumSHA1": "ffSK5lJrsPqKc7iJPH4Gu9pIO1k=",
 			"path": "github.com/jackc/pgx",
 			"revision": "9edd770c70e274b7ef67fa9f4039c824be0f8bda"
+		},
+		{
+			"checksumSHA1": "QoVjlQFru1ixgV8vh63T4/JAtLI=",
+			"path": "github.com/pkg/errors",
+			"revision": "a22138067af1c4942683050411a841ade67fe1eb",
+			"revisionTime": "2016-08-08T05:55:40Z"
 		}
 	],
 	"rootPath": "github.com/heroku-examples/go-queue-example"
