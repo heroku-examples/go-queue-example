@@ -2,7 +2,9 @@
 
 [![Deploy](https://www.herokucdn.com/deploy/button.png)](https://heroku.com/deploy)
 
-Go based Queue / Background Worker API only example.
+Go based Queue / Background Worker example.
+
+Please read the companion [Heroku Devcenter](https://devcenter.heroku.com/articles/que-go) article.
 
 After app setup you can test with the following commands:
 
