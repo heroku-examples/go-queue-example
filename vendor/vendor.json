@@ -1,6 +1,9 @@
 {
 	"comment": "",
 	"ignore": "test",
+	"heroku": {
+		"install": ["./cmd/..."]
+	},
 	"package": [
 		{
 			"checksumSHA1": "DWPL08pD/SQ2GzLfoR7ZXnjj7Sw=",
@@ -23,5 +26,5 @@
 			"revision": "9edd770c70e274b7ef67fa9f4039c824be0f8bda"
 		}
 	],
-	"rootPath": "github.com/heroku-examples/go_queue_example"
+	"rootPath": "github.com/heroku-examples/go-queue-example"
 }
