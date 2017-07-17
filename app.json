@@ -7,7 +7,6 @@
     "go"
   ],
   "buildpacks":[
-    {"url":"https://github.com/heroku/heroku-buildpack-addon-wait.git"},
     {"url":"heroku/go"}
   ],
   "website": "http://github.com/heroku-examples/go_queue_example",
